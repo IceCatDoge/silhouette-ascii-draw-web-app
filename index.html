@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Uplink Terminal // Stress Relief</title>
+    <style>
+        /* --- Base Setup --- */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+            touch-action: none; 
+            user-select: none;  
+        }
+
+        /* --- Canvas Layer --- */
+        #matrix-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* --- UI Layer --- */
+        #ui-layer {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 15px;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            pointer-events: auto;
+            max-width: 70%;
+        }
+
+        /* --- Score Display --- */
+        .score-container {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border: 1px solid var(--theme-color, #0F0);
+            border-radius: 4px;
+            color: var(--theme-color, #0F0);
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-shadow: 0 0 8px var(--theme-color, #0F0);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            pointer-events: auto;
+        }
+
+        /* --- Buttons --- */
+        .hacker-btn {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid var(--theme-color, #0F0);
+            color: var(--theme-color, #0F0);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            font-family: inherit;
+            font-weight: bold;
+            cursor: pointer;
+            text-shadow: 0 0 8px var(--theme-color, #0F0);
+            transition: all 0.2s ease;
+        }
+        
+        .hacker-btn:active {
+            transform: scale(0.95);
+            background: var(--theme-color, #0F0);
+            color: #000;
+        }
+
+        /* Distinct styling for the export button to separate it visually */
+        #export-btn {
+            border-style: dashed;
+        }
+
+        @media (max-width: 850px) {
+            #ui-layer {
+                flex-direction: column-reverse;
+                align-items: flex-start;
+            }
+            .controls {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="matrix-canvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="controls">
+            <button class="hacker-btn" id="color-btn">SYS: GRN</button>
+            <button class="hacker-btn" id="char-btn">DAT: BIN</button>
+            <button class="hacker-btn" id="pwr-btn">PWR: MED</button>
+            <button class="hacker-btn" id="vol-btn">VOL: NRM</button>
+            <button class="hacker-btn" id="halt-btn">SYS: RUN</button>
+            <button class="hacker-btn" id="export-btn">EXPORT PNG</button>
+        </div>
+        <div class="score-container">
+            UPLINK: <span id="hex-score">0x00000000</span>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration Arrays ---
+        const themes = [
+            { name: 'SYS: GRN', hex: '#0F0' },
+            { name: 'SYS: AMB', hex: '#FFBF00' },
+            { name: 'SYS: BLU', hex: '#00BFFF' },
+            { name: 'SYS: PUR', hex: '#A020F0' },
+            { name: 'SYS: RED', hex: '#FF0000' },
+            { name: 'SYS: WHT', hex: '#FFFFFF' } // Added White for pure sketching
+        ];
+
+        const charSets = [
+            { name: 'DAT: BIN', chars: '01' },
+            { name: 'DAT: HEX', chars: '0123456789ABCDEF' },
+            { name: 'DAT: ASC', chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*()_+{}[]|;:,.<>?' }
+        ];
+
+        const powerModes = [
+            { name: 'PWR: LOW', interval: 60, fade: 'rgba(0, 0, 0, 0.1)' },
+            { name: 'PWR: MED', interval: 33, fade: 'rgba(0, 0, 0, 0.05)' },
+            { name: 'PWR: HI',  interval: 16, fade: 'rgba(0, 0, 0, 0.02)' } 
+        ];
+
+        // --- State Variables ---
+        let currentTheme = 0;
+        let currentCharSet = 0;
+        let currentPower = 1; 
+        let isVolumeMax = false; 
+        let isHalted = false; // New state for halting the streams
+        let score = 0;
+        let animationTimer;
+
+        // --- DOM Elements ---
+        const canvas = document.getElementById('matrix-canvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('hex-score');
+        const colorBtn = document.getElementById('color-btn');
+        const charBtn = document.getElementById('char-btn');
+        const pwrBtn = document.getElementById('pwr-btn');
+        const volBtn = document.getElementById('vol-btn');
+        const haltBtn = document.getElementById('halt-btn');
+        const exportBtn = document.getElementById('export-btn');
+
+        // --- Canvas Setup ---
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+        const fontSize = 16;
+        let columns = Math.floor(width / fontSize);
+        let drops = [];
+
+        // Initialize streams scattered across the screen vertically
+        for (let x = 0; x < columns; x++) {
+            drops[x] = Math.floor(Math.random() * (height / fontSize));
+        }
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            columns = Math.floor(width / fontSize);
+            drops = [];
+            for (let x = 0; x < columns; x++) drops[x] = Math.floor(Math.random() * (height / fontSize));
+        });
+
+        // --- Drawing Loop ---
+        function drawMatrix() {
+            ctx.fillStyle = powerModes[currentPower].fade;
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.fillStyle = themes[currentTheme].hex;
+            ctx.font = fontSize + 'px monospace';
+
+            const activeChars = charSets[currentCharSet].chars;
+
+            for (let i = 0; i < drops.length; i++) {
+                // If drop is offscreen (negative), don't render it
+                if (drops[i] < 0) continue;
+
+                const text = activeChars.charAt(Math.floor(Math.random() * activeChars.length));
+                
+                // Draw the character
+                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+
+                // Gravity logic - Only applies if the system is NOT halted
+                if (!isHalted) {
+                    // Reset drop logic
+                    if (drops[i] * fontSize > height) {
+                        if (isVolumeMax || Math.random() > 0.975) {
+                            drops[i] = 0;
+                        }
+                    }
+                    drops[i]++;
+                }
+            }
+        }
+
+        function startAnimation() {
+            if (animationTimer) clearInterval(animationTimer);
+            animationTimer = setInterval(drawMatrix, powerModes[currentPower].interval);
+        }
+
+        // --- Drawing/Popping Mechanic ---
+        function paintDataStream(clientX, clientY) {
+            const col = Math.floor(clientX / fontSize);
+            const row = Math.floor(clientY / fontSize);
+            let popped = false;
+
+            for (let i = -1; i <= 1; i++) {
+                const targetCol = col + i;
+                if (targetCol >= 0 && targetCol < columns) {
+                    drops[targetCol] = row;
+                    score += 255; 
+                    popped = true;
+                }
+            }
+
+            if (popped) {
+                const hexString = score.toString(16).toUpperCase().padStart(8, '0');
+                scoreElement.innerText = '0x' + hexString;
+            }
+        }
+
+        // --- Event Listeners for Interaction ---
+        let isHolding = false;
+
+        window.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('#ui-layer')) return; 
+            isHolding = true;
+            paintDataStream(e.clientX, e.clientY);
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (isHolding) {
+                paintDataStream(e.clientX, e.clientY);
+            }
+        });
+
+        window.addEventListener('pointerup', () => isHolding = false);
+        window.addEventListener('pointercancel', () => isHolding = false);
+
+        // --- Button Logic ---
+        colorBtn.addEventListener('click', () => {
+            currentTheme = (currentTheme + 1) % themes.length;
+            colorBtn.innerText = themes[currentTheme].name;
+            document.documentElement.style.setProperty('--theme-color', themes[currentTheme].hex);
+        });
+
+        charBtn.addEventListener('click', () => {
+            currentCharSet = (currentCharSet + 1) % charSets.length;
+            charBtn.innerText = charSets[currentCharSet].name;
+        });
+
+        pwrBtn.addEventListener('click', () => {
+            currentPower = (currentPower + 1) % powerModes.length;
+            pwrBtn.innerText = powerModes[currentPower].name;
+            startAnimation(); 
+        });
+
+        volBtn.addEventListener('click', () => {
+            isVolumeMax = !isVolumeMax;
+            volBtn.innerText = isVolumeMax ? 'VOL: MAX' : 'VOL: NRM';
+            
+            if (isVolumeMax && !isHalted) {
+                for (let i = 0; i < drops.length; i++) {
+                    if (drops[i] <= 0 || drops[i] * fontSize > height) {
+                        drops[i] = 0;
+                    }
+                }
+            }
+        });
+
+        haltBtn.addEventListener('click', () => {
+            isHalted = !isHalted;
+            haltBtn.innerText = isHalted ? 'SYS: HLT' : 'SYS: RUN';
+            
+            // Visual feedback on the button
+            if (isHalted) {
+                haltBtn.style.backgroundColor = 'var(--theme-color)';
+                haltBtn.style.color = '#000';
+            } else {
+                haltBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                haltBtn.style.color = 'var(--theme-color)';
+            }
+        });
+
+        // The Export Function
+        exportBtn.addEventListener('click', () => {
+            // Create a temporary link element
+            const link = document.createElement('a');
+            link.download = 'uplink_terminal_export.png';
+            
+            // Convert canvas data to a Base64 PNG image URL
+            link.href = canvas.toDataURL('image/png');
+            
+            // Trigger the download automatically
+            link.click();
+        });
+
+        // Initialize
+        startAnimation();
+    </script>
+</body>
+</html>
